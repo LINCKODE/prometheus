@@ -6,6 +6,7 @@ on:
 
 env:
   SOLUTION_FILE_PATH: .
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
 
 jobs:
   build:
@@ -18,6 +19,17 @@ jobs:
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
+
+    - name: Create vcpkg binary cache dir
+      run: mkdir -p "${{ github.workspace }}\vcpkg-cache"
+      shell: bash
+
+    - name: Cache vcpkg packages
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}\vcpkg-cache
+        key: vcpkg-${{ hashFiles('**/vcpkg.json') }}
+        restore-keys: vcpkg-
 
     - name: Restore NuGet packages
       working-directory: ${{env.GITHUB_WORKSPACE}}
