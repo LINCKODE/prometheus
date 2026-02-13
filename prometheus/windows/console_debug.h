@@ -24,15 +24,16 @@ struct GameString {
 
 // Console command entry as stored in the hash table
 struct ConsoleCommand {
-    union {
-        STRUCT_PLACE_CUSTOM(func,     0x00, void* func_ptr);       // Handler function pointer
-        STRUCT_PLACE_CUSTOM(name,     0x08, GameString name);      // Command name
-        STRUCT_PLACE_CUSTOM(usage,    0x48, GameString usage);     // Usage/description
-        STRUCT_PLACE_CUSTOM(hash,     0x88, uint32_t hash);        // CRC32 hash
-        STRUCT_PLACE_CUSTOM(min_args, 0x98, uint8_t min_args);     // Min argument count
-        STRUCT_PLACE_CUSTOM(max_args, 0x99, uint8_t max_args);     // Max argument count
-        STRUCT_PLACE_CUSTOM(next,     0xA0, ConsoleCommand* next); // Next in hash chain
-    };
+    char _pad[0xA8]; // Reserve full struct size
+
+    // Accessor methods using offsets
+    void*& func_ptr() { return *(void**)((char*)this + 0x00); }
+    GameString& name() { return *(GameString*)((char*)this + 0x08); }
+    GameString& usage() { return *(GameString*)((char*)this + 0x48); }
+    uint32_t& hash() { return *(uint32_t*)((char*)this + 0x88); }
+    uint8_t& min_args() { return *(uint8_t*)((char*)this + 0x98); }
+    uint8_t& max_args() { return *(uint8_t*)((char*)this + 0x99); }
+    ConsoleCommand*& next() { return *(ConsoleCommand**)((char*)this + 0xA0); }
 };
 
 // Log entry for command execution attempts
@@ -72,20 +73,16 @@ private:
     // Hook functions
     static uint64_t ConsoleCommandHandler_hook(int argc, uint64_t* argv) {
         // Log the command attempt
-        CommandLogEntry entry;
-        entry.timestamp = std::time(nullptr);
-        entry.argc = argc;
+        const char* cmd_name = nullptr;
 
+        // Safely get command name without C++ objects in __try
         __try {
             if (argv && *argv) {
-                const char* cmd_name = (const char*)*argv;
-                entry.command = cmd_name ? cmd_name : "<null>";
-            } else {
-                entry.command = "<null argv>";
+                cmd_name = (const char*)*argv;
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
-            entry.command = "<invalid ptr>";
+            cmd_name = nullptr;
         }
 
         // Call original
@@ -94,16 +91,16 @@ private:
             result = ConsoleCommandHandler_orig(argc, argv);
         }
 
-        // Determine result
-        if (result == 0) {
-            entry.result = "Not Found/Failed";
-        } else {
-            entry.result = "Executed";
-        }
+        // Build log entry with C++ objects outside __try
+        CommandLogEntry entry;
+        entry.timestamp = std::time(nullptr);
+        entry.argc = argc;
+        entry.command = cmd_name ? cmd_name : "<invalid>";
+        entry.result = (result == 0) ? "Not Found/Failed" : "Executed";
 
         // Add to log (with size limit)
         g_commandLog.push_back(entry);
-        if (g_commandLog.size() > g_maxLogEntries) {
+        if (g_commandLog.size() > (size_t)g_maxLogEntries) {
             g_commandLog.erase(g_commandLog.begin());
         }
 
@@ -112,18 +109,6 @@ private:
 
     static void ConsoleCheatCommandCheck_hook(int64_t* param_1, int64_t* param_2) {
         if (g_bypassCheatCheck) {
-            // Log bypass event
-            CommandLogEntry entry;
-            entry.timestamp = std::time(nullptr);
-            entry.command = "<cheat command>";
-            entry.argc = 0;
-            entry.result = "Bypass Enabled";
-
-            g_commandLog.push_back(entry);
-            if (g_commandLog.size() > g_maxLogEntries) {
-                g_commandLog.erase(g_commandLog.begin());
-            }
-
             // Skip connection check, go straight to execution
             auto execute = (void(*)(int64_t*, int64_t*))(globals::gameBase + RVA_ConsoleCheatCommandExecute);
             __try {
@@ -131,6 +116,18 @@ private:
             }
             __except (EXCEPTION_EXECUTE_HANDLER) {
                 // Execution failed
+            }
+
+            // Log bypass event (after __try, with C++ objects)
+            CommandLogEntry entry;
+            entry.timestamp = std::time(nullptr);
+            entry.command = "<cheat command>";
+            entry.argc = 0;
+            entry.result = "Bypass Enabled";
+
+            g_commandLog.push_back(entry);
+            if (g_commandLog.size() > (size_t)g_maxLogEntries) {
+                g_commandLog.erase(g_commandLog.begin());
             }
             return;
         }
@@ -142,32 +139,40 @@ private:
     }
 
     void refreshCommands() {
-        m_cachedCommands.clear();
+        // Temporary array for collecting commands (plain C array, safe in __try)
+        ConsoleCommand* tempCommands[2048];
+        int cmdCount = 0;
 
         __try {
             // Read hash table (256 buckets)
             ConsoleCommand** hashTable = (ConsoleCommand**)(globals::gameBase + RVA_CommandHashTable);
 
-            for (int bucket = 0; bucket < 256; bucket++) {
+            for (int bucket = 0; bucket < 256 && cmdCount < 2048; bucket++) {
                 ConsoleCommand* cmd = hashTable[bucket];
 
                 // Walk linked list for this bucket
-                while (cmd != nullptr) {
+                while (cmd != nullptr && cmdCount < 2048) {
                     // Validate pointer before dereferencing
                     if (IsBadReadPtr(cmd, sizeof(ConsoleCommand))) {
                         break;
                     }
 
-                    m_cachedCommands.push_back(cmd);
+                    tempCommands[cmdCount++] = cmd;
 
                     // Get next in chain
-                    cmd = cmd->next;
+                    cmd = cmd->next();
                 }
             }
         }
         __except (EXCEPTION_EXECUTE_HANDLER) {
             // Failed to read hash table
-            m_cachedCommands.clear();
+            cmdCount = 0;
+        }
+
+        // Now build the vector outside __try (C++ objects safe here)
+        m_cachedCommands.clear();
+        for (int i = 0; i < cmdCount; i++) {
+            m_cachedCommands.push_back(tempCommands[i]);
         }
 
         m_needsRefresh = false;
@@ -242,7 +247,7 @@ public:
 
                     for (auto* cmd : m_cachedCommands) {
                         __try {
-                            const char* name = cmd->name.get();
+                            const char* name = cmd->name().get();
                             if (!name || name[0] == '\0') continue;
 
                             // Apply filter
@@ -252,7 +257,7 @@ public:
 
                             // Bucket (hash low byte)
                             ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->hash & 0xFF);
+                            ImGui::Text("%d", cmd->hash() & 0xFF);
 
                             // Name
                             ImGui::TableNextColumn();
@@ -260,24 +265,24 @@ public:
 
                             // Hash
                             ImGui::TableNextColumn();
-                            ImGui::Text("%08X", cmd->hash);
+                            ImGui::Text("%08X", cmd->hash());
 
                             // Min Args
                             ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->min_args);
+                            ImGui::Text("%d", cmd->min_args());
 
                             // Max Args
                             ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->max_args);
+                            ImGui::Text("%d", cmd->max_args());
 
                             // Usage
                             ImGui::TableNextColumn();
-                            const char* usage = cmd->usage.get();
+                            const char* usage = cmd->usage().get();
                             ImGui::TextWrapped("%s", usage ? usage : "");
 
                             // Function Address (as RVA)
                             ImGui::TableNextColumn();
-                            uint64_t rva = (uint64_t)cmd->func_ptr - globals::gameBase;
+                            uint64_t rva = (uint64_t)cmd->func_ptr() - globals::gameBase;
                             ImGui::Text("%08llX", rva);
                         }
                         __except (EXCEPTION_EXECUTE_HANDLER) {
