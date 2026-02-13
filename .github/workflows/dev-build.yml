@@ -1,0 +1,39 @@
+name: Dev Build
+
+on:
+  push:
+    branches: [ "dev" ]
+
+env:
+  SOLUTION_FILE_PATH: .
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.0.2
+
+    - name: Restore NuGet packages
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: nuget restore ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Stage vcpkg
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: . .\external\vcpkg\scripts\bootstrap.ps1
+
+    - name: Build
+      working-directory: ${{env.GITHUB_WORKSPACE}}
+      run: msbuild /p:Configuration=Release /p:PlatformTarget=x64 /p:OutDir=${{env.GITHUB_WORKSPACE}}\output ${{env.SOLUTION_FILE_PATH}}
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: prometheus-dev
+        path: ${{env.GITHUB_WORKSPACE}}\output\*.*
+        retention-days: 5
