@@ -131,8 +131,20 @@ private:
     void refreshCommands() {
         m_cachedCommands.clear();
 
+        // Safety check - ensure game base is initialized
+        if (globals::gameBase == 0) {
+            m_needsRefresh = false;
+            return;
+        }
+
         // Read hash table (256 buckets)
         ConsoleCommand** hashTable = (ConsoleCommand**)(globals::gameBase + RVA_CommandHashTable);
+
+        // Validate hash table pointer
+        if (IsBadReadPtr(hashTable, sizeof(void*) * 256)) {
+            m_needsRefresh = false;
+            return;
+        }
 
         for (int bucket = 0; bucket < 256; bucket++) {
             ConsoleCommand* cmd = hashTable[bucket];
@@ -199,7 +211,8 @@ public:
 
             // Registered Commands Table
             if (ImGui::CollapsingHeader("Registered Commands", ImGuiTreeNodeFlags_DefaultOpen)) {
-                if (m_needsRefresh) {
+                // Only refresh if game is fully initialized
+                if (m_needsRefresh && globals::gameBase != 0) {
                     refreshCommands();
                 }
 
