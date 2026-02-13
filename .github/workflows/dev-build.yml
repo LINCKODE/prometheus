@@ -59,9 +59,12 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       run: msbuild /p:Configuration=Release /p:PlatformTarget=x64 /p:OutDir=${{env.GITHUB_WORKSPACE}}\output ${{env.SOLUTION_FILE_PATH}}
 
+    - name: Rename DLL to inject.dll
+      run: Rename-Item -Path "${{env.GITHUB_WORKSPACE}}\output\prometheus.dll" -NewName "inject.dll"
+
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
       with:
         name: prometheus-dev
-        path: ${{env.GITHUB_WORKSPACE}}\output\*.*
+        path: ${{env.GITHUB_WORKSPACE}}\output\inject.dll
         retention-days: 5

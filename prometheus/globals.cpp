@@ -17,6 +17,12 @@ namespace globals {
 	void ensure_console_allocated() {
 		std::call_once(entrypoint_mutex, [] {
 			AllocConsole();
+
+			// Increase console buffer size for Wine (default is often too small)
+			HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+			COORD bufferSize = { 120, 9999 }; // 120 columns, 9999 lines
+			SetConsoleScreenBufferSize(hConsole, bufferSize);
+
 			freopen("CONOUT$", "w", stdout);
 			freopen("CONOUT$", "w", stderr);
 			freopen("CONIN$", "w", stdin);
