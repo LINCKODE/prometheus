@@ -78,13 +78,18 @@ private:
             result = ConsoleCommandHandler_orig(argc, argv);
         }
 
+        // Only log if we have a valid argv pointer
+        if (!argv) {
+            return result;
+        }
+
         // Log the command attempt (after original call)
         CommandLogEntry entry;
         entry.timestamp = std::time(nullptr);
         entry.argc = argc;
 
         // Safely read command name
-        if (argv && *argv) {
+        if (*argv) {
             const char* cmd_name = (const char*)*argv;
             entry.command = cmd_name ? cmd_name : "<null>";
         } else {
@@ -168,19 +173,21 @@ private:
 
 public:
     inline void preStartInitialize() override {
-        // Hook ConsoleCommandHandler
-        MH_VERIFY(MH_CreateHook(
+        // TODO: Hooks disabled until we verify correct addresses
+        // The game crashes when these are enabled, suggesting wrong RVAs or timing
+        /*
+        MH_CreateHook(
             (PVOID)(globals::gameBase + RVA_ConsoleCommandHandler),
             ConsoleCommandHandler_hook,
-            (PVOID*)&ConsoleCommandHandler_orig));
-        MH_VERIFY(MH_EnableHook((PVOID)(globals::gameBase + RVA_ConsoleCommandHandler)));
+            (PVOID*)&ConsoleCommandHandler_orig);
+        MH_EnableHook((PVOID)(globals::gameBase + RVA_ConsoleCommandHandler));
 
-        // Hook ConsoleCheatCommandCheck
-        MH_VERIFY(MH_CreateHook(
+        MH_CreateHook(
             (PVOID)(globals::gameBase + RVA_ConsoleCheatCommandCheck),
             ConsoleCheatCommandCheck_hook,
-            (PVOID*)&ConsoleCheatCommandCheck_orig));
-        MH_VERIFY(MH_EnableHook((PVOID)(globals::gameBase + RVA_ConsoleCheatCommandCheck)));
+            (PVOID*)&ConsoleCheatCommandCheck_orig);
+        MH_EnableHook((PVOID)(globals::gameBase + RVA_ConsoleCheatCommandCheck));
+        */
     }
 
     inline void render() override {
