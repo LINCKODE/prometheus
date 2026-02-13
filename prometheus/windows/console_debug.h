@@ -72,30 +72,25 @@ private:
 
     // Hook functions
     static uint64_t ConsoleCommandHandler_hook(int argc, uint64_t* argv) {
-        // Log the command attempt
-        const char* cmd_name = nullptr;
-
-        // Safely get command name without C++ objects in __try
-        __try {
-            if (argv && *argv) {
-                cmd_name = (const char*)*argv;
-            }
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            cmd_name = nullptr;
-        }
-
-        // Call original
+        // Call original first
         uint64_t result = 0;
         if (ConsoleCommandHandler_orig) {
             result = ConsoleCommandHandler_orig(argc, argv);
         }
 
-        // Build log entry with C++ objects outside __try
+        // Log the command attempt (after original call)
         CommandLogEntry entry;
         entry.timestamp = std::time(nullptr);
         entry.argc = argc;
-        entry.command = cmd_name ? cmd_name : "<invalid>";
+
+        // Safely read command name
+        if (argv && *argv) {
+            const char* cmd_name = (const char*)*argv;
+            entry.command = cmd_name ? cmd_name : "<null>";
+        } else {
+            entry.command = "<null argv>";
+        }
+
         entry.result = (result == 0) ? "Not Found/Failed" : "Executed";
 
         // Add to log (with size limit)
@@ -111,14 +106,9 @@ private:
         if (g_bypassCheatCheck) {
             // Skip connection check, go straight to execution
             auto execute = (void(*)(int64_t*, int64_t*))(globals::gameBase + RVA_ConsoleCheatCommandExecute);
-            __try {
-                execute(param_1 - 0x54, param_2);
-            }
-            __except (EXCEPTION_EXECUTE_HANDLER) {
-                // Execution failed
-            }
+            execute(param_1 - 0x54, param_2);
 
-            // Log bypass event (after __try, with C++ objects)
+            // Log bypass event
             CommandLogEntry entry;
             entry.timestamp = std::time(nullptr);
             entry.command = "<cheat command>";
@@ -139,40 +129,26 @@ private:
     }
 
     void refreshCommands() {
-        // Temporary array for collecting commands (plain C array, safe in __try)
-        ConsoleCommand* tempCommands[2048];
-        int cmdCount = 0;
-
-        __try {
-            // Read hash table (256 buckets)
-            ConsoleCommand** hashTable = (ConsoleCommand**)(globals::gameBase + RVA_CommandHashTable);
-
-            for (int bucket = 0; bucket < 256 && cmdCount < 2048; bucket++) {
-                ConsoleCommand* cmd = hashTable[bucket];
-
-                // Walk linked list for this bucket
-                while (cmd != nullptr && cmdCount < 2048) {
-                    // Validate pointer before dereferencing
-                    if (IsBadReadPtr(cmd, sizeof(ConsoleCommand))) {
-                        break;
-                    }
-
-                    tempCommands[cmdCount++] = cmd;
-
-                    // Get next in chain
-                    cmd = cmd->next();
-                }
-            }
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            // Failed to read hash table
-            cmdCount = 0;
-        }
-
-        // Now build the vector outside __try (C++ objects safe here)
         m_cachedCommands.clear();
-        for (int i = 0; i < cmdCount; i++) {
-            m_cachedCommands.push_back(tempCommands[i]);
+
+        // Read hash table (256 buckets)
+        ConsoleCommand** hashTable = (ConsoleCommand**)(globals::gameBase + RVA_CommandHashTable);
+
+        for (int bucket = 0; bucket < 256; bucket++) {
+            ConsoleCommand* cmd = hashTable[bucket];
+
+            // Walk linked list for this bucket
+            while (cmd != nullptr) {
+                // Validate pointer before dereferencing
+                if (IsBadReadPtr(cmd, sizeof(ConsoleCommand))) {
+                    break;
+                }
+
+                m_cachedCommands.push_back(cmd);
+
+                // Get next in chain
+                cmd = cmd->next();
+            }
         }
 
         m_needsRefresh = false;
@@ -246,49 +222,43 @@ public:
                     ImGui::TableHeadersRow();
 
                     for (auto* cmd : m_cachedCommands) {
-                        __try {
-                            const char* name = cmd->name().get();
-                            if (!name || name[0] == '\0') continue;
+                        const char* name = cmd->name().get();
+                        if (!name || name[0] == '\0') continue;
 
-                            // Apply filter
-                            if (!g_commandFilter.PassFilter(name)) continue;
+                        // Apply filter
+                        if (!g_commandFilter.PassFilter(name)) continue;
 
-                            ImGui::TableNextRow();
+                        ImGui::TableNextRow();
 
-                            // Bucket (hash low byte)
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->hash() & 0xFF);
+                        // Bucket (hash low byte)
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%d", cmd->hash() & 0xFF);
 
-                            // Name
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%s", name);
+                        // Name
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%s", name);
 
-                            // Hash
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%08X", cmd->hash());
+                        // Hash
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%08X", cmd->hash());
 
-                            // Min Args
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->min_args());
+                        // Min Args
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%d", cmd->min_args());
 
-                            // Max Args
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%d", cmd->max_args());
+                        // Max Args
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%d", cmd->max_args());
 
-                            // Usage
-                            ImGui::TableNextColumn();
-                            const char* usage = cmd->usage().get();
-                            ImGui::TextWrapped("%s", usage ? usage : "");
+                        // Usage
+                        ImGui::TableNextColumn();
+                        const char* usage = cmd->usage().get();
+                        ImGui::TextWrapped("%s", usage ? usage : "");
 
-                            // Function Address (as RVA)
-                            ImGui::TableNextColumn();
-                            uint64_t rva = (uint64_t)cmd->func_ptr() - globals::gameBase;
-                            ImGui::Text("%08llX", rva);
-                        }
-                        __except (EXCEPTION_EXECUTE_HANDLER) {
-                            // Skip invalid command entry
-                            continue;
-                        }
+                        // Function Address (as RVA)
+                        ImGui::TableNextColumn();
+                        uint64_t rva = (uint64_t)cmd->func_ptr() - globals::gameBase;
+                        ImGui::Text("%08llX", rva);
                     }
 
                     ImGui::EndTable();
